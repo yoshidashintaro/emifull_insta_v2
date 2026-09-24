@@ -1,0 +1,379 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="referrer" content="no-referrer" />
+  <title>Instagram インサイト分析</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📈</text></svg>" />
+  <link rel="stylesheet" href="css/style.css" />
+  <script>
+    // テーマの初期適用（ちらつき防止）
+    (function () {
+      var saved = null;
+      try { saved = localStorage.getItem('iia.theme'); } catch (e) {}
+      if (saved === 'light' || saved === 'dark') document.documentElement.dataset.theme = saved;
+    })();
+  </script>
+  <script src="vendor/chart.umd.min.js"></script>
+  <script>
+    window.Chart || document.write('<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"><\/script>');
+  </script>
+  <script type="module" src="js/app.js"></script>
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-mark" aria-hidden="true"></span>
+      <div>
+        <h1>Instagram インサイト分析</h1>
+        <p class="account" id="account-line">データ未接続</p>
+      </div>
+    </div>
+    <div class="topbar-actions">
+      <button class="btn ghost icon" id="theme-toggle" type="button" aria-label="表示テーマを切り替え" title="表示テーマを切り替え">◐</button>
+      <button class="btn primary" id="open-data" type="button">データ接続・更新</button>
+    </div>
+  </header>
+
+  <main>
+    <!-- 初回表示 -->
+    <section class="empty" id="empty-state">
+      <h2>インスタのインサイトを自動でグラフ化・分析します</h2>
+      <p>フォロワーの増減、エンゲージメント率、投稿ごとの反応、最適な投稿時間帯をまとめて確認できます。</p>
+      <div class="empty-actions">
+        <button class="btn primary" type="button" data-open-tab="api">Instagram と連携する</button>
+        <button class="btn" type="button" data-open-tab="csv">CSV を読み込む</button>
+        <button class="btn ghost" type="button" id="empty-demo">デモデータで試す</button>
+      </div>
+    </section>
+
+    <div id="dashboard" hidden>
+      <!-- フィルタ（すべてのグラフに共通） -->
+      <div class="filters" role="group" aria-label="表示条件">
+        <div class="segmented" id="range" role="radiogroup" aria-label="期間">
+          <button type="button" role="radio" data-days="7">7日</button>
+          <button type="button" role="radio" data-days="30">30日</button>
+          <button type="button" role="radio" data-days="90">90日</button>
+          <button type="button" role="radio" data-days="180">180日</button>
+          <button type="button" role="radio" data-days="0">全期間</button>
+        </div>
+        <label class="select">
+          <span>ER の計算基準</span>
+          <select id="er-basis">
+            <option value="reach">リーチ基準（反応数 ÷ リーチ）</option>
+            <option value="followers">フォロワー基準（反応数 ÷ フォロワー数）</option>
+          </select>
+        </label>
+        <label class="select" id="account-filter-wrap" hidden>
+          <span>アカウント</span>
+          <select id="account-filter"></select>
+        </label>
+        <p class="period-note" id="period-note"></p>
+      </div>
+
+      <div class="notice" id="warnings" hidden></div>
+
+      <!-- KPI -->
+      <section class="kpis" aria-label="主要指標">
+        <article class="kpi kpi-hero">
+          <h3>フォロワー数</h3>
+          <p class="kpi-value" id="kpi-followers">–</p>
+          <p class="kpi-delta" id="kpi-followers-delta"></p>
+        </article>
+        <article class="kpi">
+          <h3>平均エンゲージメント率</h3>
+          <p class="kpi-value" id="kpi-er">–</p>
+          <p class="kpi-delta" id="kpi-er-delta"></p>
+        </article>
+        <article class="kpi">
+          <h3>投稿数</h3>
+          <p class="kpi-value" id="kpi-posts">–</p>
+          <p class="kpi-delta" id="kpi-posts-delta"></p>
+        </article>
+        <article class="kpi">
+          <h3>平均リーチ／投稿</h3>
+          <p class="kpi-value" id="kpi-reach">–</p>
+          <p class="kpi-delta" id="kpi-reach-delta"></p>
+        </article>
+        <article class="kpi">
+          <h3>平均反応数／投稿</h3>
+          <p class="kpi-value" id="kpi-inter">–</p>
+          <p class="kpi-delta" id="kpi-inter-delta"></p>
+        </article>
+        <article class="kpi" id="kpi-visits-card" hidden>
+          <h3>プロフィールアクセス</h3>
+          <p class="kpi-value" id="kpi-visits">–</p>
+          <p class="kpi-delta" id="kpi-visits-delta"></p>
+        </article>
+        <article class="kpi" id="kpi-clicks-card" hidden>
+          <h3>リンククリック</h3>
+          <p class="kpi-value" id="kpi-clicks">–</p>
+          <p class="kpi-delta" id="kpi-clicks-delta"></p>
+        </article>
+      </section>
+
+      <!-- 自動インサイト -->
+      <section class="block">
+        <div class="block-head">
+          <h2>自動分析レポート</h2>
+          <p>選択中の期間のデータから自動で抽出した傾向と改善ポイントです。</p>
+        </div>
+        <ul class="insights" id="insights"></ul>
+      </section>
+
+      <!-- フォロワー -->
+      <section class="block">
+        <div class="block-head"><h2>フォロワーの増減</h2></div>
+        <div class="grid-2">
+          <article class="card" data-chart="c-followers">
+            <header><div><h3>フォロワー数の推移</h3><p class="sub" id="followers-sub">日次</p></div></header>
+            <div class="chart h-260"><canvas id="c-followers" role="img" aria-label="フォロワー数の推移"></canvas></div>
+          </article>
+          <article class="card" data-chart="c-net">
+            <header><div><h3 id="net-title">日次の純増減</h3><p class="sub"><span class="key key-pos"></span>増加 <span class="key key-neg"></span>減少</p></div></header>
+            <div class="chart h-260"><canvas id="c-net" role="img" aria-label="日次のフォロワー増減"></canvas></div>
+          </article>
+        </div>
+      </section>
+
+      <!-- アカウントの活動（日次インサイト） -->
+      <section class="block" id="activity-block" hidden>
+        <div class="block-head">
+          <h2>アカウントの活動</h2>
+          <p>投稿単位ではなく、アカウント全体の1日ごとの数字です。「見られた → プロフィールに来た → リンクを押した」の流れを確認できます。</p>
+        </div>
+        <article class="card" data-chart="c-reach" id="reach-card">
+          <header><div><h3>リーチとビューの推移</h3><p class="sub" id="reach-sub">日次</p></div></header>
+          <div class="chart h-240"><canvas id="c-reach" role="img" aria-label="日次のリーチとビューの推移"></canvas></div>
+        </article>
+        <div class="grid-2-1">
+          <article class="card" data-chart="c-traffic" id="traffic-card">
+            <header><div><h3>プロフィールアクセス・リンククリック</h3><p class="sub">日次の遷移数とコンテンツへの反応</p></div></header>
+            <div class="chart h-260"><canvas id="c-traffic" role="img" aria-label="プロフィールアクセスとリンククリックの推移"></canvas></div>
+          </article>
+          <article class="card" id="funnel-card">
+            <header><div><h3>予約までの導線</h3><p class="sub">期間合計と、ひとつ前の段階からの通過率</p></div></header>
+            <div class="funnel" id="funnel"></div>
+          </article>
+        </div>
+      </section>
+
+      <!-- エンゲージメント -->
+      <section class="block">
+        <div class="block-head"><h2>エンゲージメント率</h2><p id="er-def"></p></div>
+        <div class="grid-2-1">
+          <article class="card" data-chart="c-er">
+            <header><div><h3>投稿ごとのエンゲージメント率</h3><p class="sub">点＝各投稿（形で投稿タイプを区別）、線＝週平均</p></div></header>
+            <div class="chart h-300"><canvas id="c-er" role="img" aria-label="投稿ごとのエンゲージメント率と週平均"></canvas></div>
+          </article>
+          <article class="card" data-chart="c-type">
+            <header><div><h3>投稿タイプ別 平均ER</h3><p class="sub">タイプごとの平均エンゲージメント率</p></div></header>
+            <div class="chart h-300"><canvas id="c-type" role="img" aria-label="投稿タイプ別の平均エンゲージメント率"></canvas></div>
+          </article>
+        </div>
+      </section>
+
+      <!-- 投稿ごとの反応 -->
+      <section class="block">
+        <div class="block-head"><h2>投稿ごとの反応</h2></div>
+        <article class="card" data-chart="c-top">
+          <header>
+            <div><h3>上位10投稿</h3><p class="sub">棒をクリックすると投稿を開きます（API 連携時）</p></div>
+            <label class="select compact">
+              <span class="sr-only">並べ替え指標</span>
+              <select id="top-metric"></select>
+            </label>
+          </header>
+          <div class="chart h-340"><canvas id="c-top" role="img" aria-label="上位10投稿"></canvas></div>
+        </article>
+
+        <article class="card">
+          <header>
+            <div><h3>全投稿一覧</h3><p class="sub" id="posts-count"></p></div>
+            <div class="table-tools">
+              <input type="search" id="post-search" placeholder="キャプション・ハッシュタグで絞り込み" aria-label="投稿を検索" />
+              <button class="btn small" type="button" id="export-posts">CSV 出力</button>
+            </div>
+          </header>
+          <div class="table-wrap">
+            <table class="data-table posts-table" id="posts-table">
+              <thead>
+                <tr>
+                  <th data-sort="timestamp">投稿日時</th>
+                  <th data-sort="type">タイプ</th>
+                  <th>内容</th>
+                  <th data-sort="views" class="num col-views">ビュー</th>
+                  <th data-sort="reach" class="num">リーチ</th>
+                  <th data-sort="likes" class="num">いいね</th>
+                  <th data-sort="comments" class="num">コメント</th>
+                  <th data-sort="saves" class="num">保存</th>
+                  <th data-sort="shares" class="num">シェア</th>
+                  <th data-sort="follows" class="num col-follows">フォロー</th>
+                  <th data-sort="interactions" class="num">反応計</th>
+                  <th data-sort="er" class="num">ER</th>
+                </tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </article>
+      </section>
+
+      <!-- 投稿時間 -->
+      <section class="block">
+        <div class="block-head">
+          <h2>最適な投稿時間帯</h2>
+          <p>投稿した曜日・時間帯ごとの平均エンゲージメント率。投稿数の少ない枠は全体平均に寄せて評価しています。</p>
+        </div>
+        <div class="grid-2-1">
+          <article class="card" data-heatmap="1">
+            <header><div><h3>曜日 × 時間帯</h3><p class="sub">濃いほど反応が良い・数値はおすすめ上位3枠</p></div></header>
+            <div class="heatmap" id="heatmap" role="grid" aria-label="曜日と時間帯ごとの平均エンゲージメント率"></div>
+            <div class="scale" aria-hidden="true"><span>低い</span><i class="scale-bar"></i><span>高い</span><span class="scale-empty"><i></i>投稿なし</span></div>
+          </article>
+          <article class="card">
+            <header><div><h3>おすすめの投稿枠</h3><p class="sub">2投稿以上ある枠から算出</p></div></header>
+            <ol class="best-slots" id="best-slots"></ol>
+          </article>
+        </div>
+        <div class="grid-2">
+          <article class="card" data-chart="c-hour">
+            <header><div><h3>時間帯別 平均ER</h3><p class="sub">濃い棒＝上位3時間帯</p></div></header>
+            <div class="chart h-240"><canvas id="c-hour" role="img" aria-label="時間帯別の平均エンゲージメント率"></canvas></div>
+          </article>
+          <article class="card" data-chart="c-weekday">
+            <header><div><h3>曜日別 平均ER</h3><p class="sub">濃い棒＝上位2曜日</p></div></header>
+            <div class="chart h-240"><canvas id="c-weekday" role="img" aria-label="曜日別の平均エンゲージメント率"></canvas></div>
+          </article>
+        </div>
+      </section>
+
+      <!-- オーディエンス -->
+      <section class="block" id="audience-block" hidden>
+        <div class="block-head">
+          <h2>フォロワーの内訳</h2>
+          <p id="audience-lead">Meta の「オーディエンス」エクスポートから読み取った、現在のフォロワーの構成です（期間の切り替えには連動しません）。</p>
+        </div>
+        <div class="grid-2-1">
+          <article class="card" data-chart="c-age" id="age-card">
+            <header><div><h3>年齢層 × 性別</h3><p class="sub">フォロワー全体に占める割合</p></div></header>
+            <div class="chart h-280"><canvas id="c-age" role="img" aria-label="年齢層と性別の構成比"></canvas></div>
+          </article>
+          <article class="card" data-chart="c-country" id="country-card">
+            <header><div><h3>上位の国</h3><p class="sub">フォロワーの所在国</p></div></header>
+            <div class="chart h-280"><canvas id="c-country" role="img" aria-label="フォロワーの上位の国"></canvas></div>
+          </article>
+        </div>
+        <article class="card" data-chart="c-city" id="city-card">
+          <header><div><h3>上位の都市</h3><p class="sub">来院できる範囲かどうかの目安になります</p></div></header>
+          <div class="chart h-300"><canvas id="c-city" role="img" aria-label="フォロワーの上位の都市"></canvas></div>
+        </article>
+      </section>
+
+      <!-- ハッシュタグ -->
+      <section class="block">
+        <div class="block-head"><h2>ハッシュタグ別の反応</h2><p>2回以上使ったハッシュタグの平均ER（全体平均との比較）</p></div>
+        <article class="card">
+          <div class="table-wrap">
+            <table class="data-table" id="hashtag-table">
+              <thead><tr><th>ハッシュタグ</th><th class="num">使用回数</th><th class="num">平均ER</th><th class="num">全体平均比</th><th class="num">平均リーチ</th></tr></thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </article>
+      </section>
+    </div>
+  </main>
+
+  <footer class="foot">
+    データとアクセストークンはこのブラウザ内（localStorage）にのみ保存され、Instagram Graph API 以外へは送信されません。
+  </footer>
+
+  <!-- データ接続ダイアログ -->
+  <dialog id="data-dialog" aria-labelledby="dlg-title">
+    <form method="dialog" class="dlg-close"><button class="btn ghost icon" aria-label="閉じる">✕</button></form>
+    <h2 id="dlg-title">データ接続</h2>
+    <div class="tabs" role="tablist">
+      <button role="tab" type="button" data-tab="api" aria-selected="true">Instagram API 連携</button>
+      <button role="tab" type="button" data-tab="csv">CSV 取り込み</button>
+      <button role="tab" type="button" data-tab="demo">デモ・管理</button>
+    </div>
+
+    <div class="tab-panel" data-panel="api">
+      <p class="help">
+        Instagram の<strong>プロアカウント（ビジネス／クリエイター）</strong>と、Meta for Developers で発行したアクセストークンが必要です。
+        詳しい手順は README.md を参照してください。
+      </p>
+      <form id="api-form" class="form">
+        <label>ログイン方式
+          <select name="host">
+            <option value="instagram">Instagram ログイン（graph.instagram.com）</option>
+            <option value="facebook">Facebook ログイン（graph.facebook.com）</option>
+          </select>
+        </label>
+        <label>アクセストークン
+          <input name="token" type="password" autocomplete="off" required placeholder="IGAA… / EAA…" />
+        </label>
+        <div class="row">
+          <label>Instagram ユーザーID
+            <input name="userId" placeholder="me" />
+          </label>
+          <button class="btn small" type="button" id="find-ig">ID を検出</button>
+        </div>
+        <p class="help small">Instagram ログインは「me」のままで OK。Facebook ログインの場合は「ID を検出」でビジネスアカウントIDを取得します。</p>
+        <div class="row">
+          <label>取得する投稿数
+            <input name="postLimit" type="number" min="5" max="500" value="50" />
+          </label>
+          <label>API バージョン
+            <input name="version" value="v23.0" />
+          </label>
+        </div>
+        <label class="check"><input type="checkbox" name="remember" /> トークンをこのブラウザに保存する</label>
+        <p class="status" id="api-status" role="status" aria-live="polite"></p>
+        <button class="btn primary" type="submit">取得して分析</button>
+      </form>
+    </div>
+
+    <div class="tab-panel" data-panel="csv" hidden>
+      <p class="help">
+        Meta Business Suite の「インサイト → エクスポート」で出力した CSV をそのまま読み込めます。
+        <strong>投稿データ</strong>（Post ID・Publish time・Likes…）、
+        <strong>指標ごとの日次ファイル</strong>（Reach.csv・Views.csv・Visits.csv・Link clicks.csv・Interactions.csv・Follows.csv）、
+        <strong>オーディエンス</strong>（Audience.csv：フォロワー総数・年齢×性別・都市・国）を自動判別します。
+        ダウンロードしたファイルを<strong>まとめて選択</strong>してください。自作の CSV（日付・フォロワー数…）も読み込めます。
+      </p>
+      <p class="help small">
+        ※ 日次ファイルは表題かファイル名で指標を見分けます。<strong>ファイル名は変更せずに</strong>読み込んでください。
+        文字コードは UTF-16 / UTF-8 / Shift_JIS に対応しています。
+      </p>
+      <label class="drop" id="drop">
+        <input type="file" id="csv-input" accept=".csv,.tsv,.txt,text/csv" multiple />
+        <span>CSV ファイルをドロップ、またはクリックして選択</span>
+      </label>
+      <label class="check"><input type="checkbox" id="csv-merge" checked /> 現在のデータに追加（同じ投稿ID・日付は上書き）</label>
+      <p class="status" id="csv-status" role="status" aria-live="polite"></p>
+      <p class="help small">サンプル: <a href="samples/posts_sample.csv" download>posts_sample.csv</a> ・ <a href="samples/daily_sample.csv" download>daily_sample.csv</a></p>
+    </div>
+
+    <div class="tab-panel" data-panel="demo" hidden>
+      <p class="help">架空アカウントの180日分のデータで全機能を試せます。</p>
+      <div class="row">
+        <button class="btn primary" type="button" id="load-demo">デモデータを読み込む</button>
+      </div>
+      <hr />
+      <div class="row">
+        <button class="btn" type="button" id="export-json">データをバックアップ（JSON）</button>
+        <label class="btn">バックアップから復元<input type="file" id="import-json" accept=".json,application/json" hidden /></label>
+      </div>
+      <div class="row">
+        <button class="btn danger" type="button" id="clear-data">保存データとトークンを削除</button>
+      </div>
+    </div>
+  </dialog>
+
+  <div class="tooltip" id="tooltip" role="tooltip" hidden></div>
+  <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
+</body>
+</html>
